@@ -2,35 +2,43 @@ import Redis from "ioredis";
 
 const redisUrl = process.env.REDIS_URL;
 
-const baseConfig = {
-  maxRetriesPerRequest: null, // required by bullmq
-  enableReadyCheck: false,
-  keepAlive: 10000, // prevent Upstash from dropping idle connections
-  retryStrategy: (times: number) => Math.min(times * 200, 2000),
-};
+function makeConfig(forBullMQ = false) {
+  const base = {
+    maxRetriesPerRequest: forBullMQ ? null : 3,
+    enableReadyCheck: false,
+    lazyConnect: false,
+    keepAlive: 30000,
+    connectTimeout: 10000,
+    retryStrategy: (times: number) => Math.min(times * 500, 5000),
+  };
 
-const redisConfig = redisUrl
-  ? {
-      ...baseConfig,
-      tls: redisUrl.startsWith("rediss://") ? { rejectUnauthorized: false } : undefined,
-    }
-  : {
-      ...baseConfig,
-      host: process.env.REDIS_HOST || "127.0.0.1",
-      port: Number(process.env.REDIS_PORT) || 6379,
-      password: process.env.REDIS_PASSWORD || undefined,
+  if (redisUrl) {
+    return {
+      ...base,
+      tls: { rejectUnauthorized: false }, // required for Upstash rediss://
     };
+  }
+
+  return {
+    ...base,
+    host: process.env.REDIS_HOST || "127.0.0.1",
+    port: Number(process.env.REDIS_PORT) || 6379,
+    password: process.env.REDIS_PASSWORD || undefined,
+  };
+}
 
 const redisClient = redisUrl
-  ? new Redis(redisUrl, redisConfig)
-  : new Redis(redisConfig);
+  ? new Redis(redisUrl, makeConfig())
+  : new Redis(makeConfig());
 
 redisClient.on("connect", () => console.log("Redis connected"));
 redisClient.on("error", (err) => console.error("Redis error:", err.message));
 
-// bullmq requires a dedicated connection per queue/worker
+// bullmq needs its own connection per queue/worker (maxRetriesPerRequest: null)
 export function createRedisConnection() {
-  return redisUrl ? new Redis(redisUrl, redisConfig) : new Redis(redisConfig);
+  return redisUrl
+    ? new Redis(redisUrl, makeConfig(true))
+    : new Redis(makeConfig(true));
 }
 
 export default redisClient;
